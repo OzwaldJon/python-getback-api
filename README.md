@@ -48,16 +48,21 @@ Only these `Content-Type` values are accepted:
 
 ### Optional encryption with passphrase
 
-If you include the request header `X-Passphrase`, the API will store the payload **encrypted at rest**.
+If you include passphrase headers, the API will store the payload **encrypted at rest**.
 
 - Encryption: AES-GCM
 - Key derivation: PBKDF2-HMAC-SHA256 with a per-item random salt
 
 Behavior:
 
-- If an item was created encrypted, reading/updating it requires the same `X-Passphrase`.
-- If `X-Passphrase` is missing or incorrect, the API returns **404** (to not reveal existence).
+- If an item was created encrypted, reading/updating it requires the correct passphrase headers.
+- If passphrases are missing or incorrect, the API returns **404** (to not reveal existence).
 - Responses preserve the original `Content-Type`.
+
+Headers:
+
+- `X-Read-Passphrase`: required to decrypt on `GET /{uuid}`
+- `X-Write-Passphrase`: required to update on `POST /{uuid}`
 
 #### Encryption examples
 
@@ -66,7 +71,8 @@ Create encrypted JSON:
 ```bash
 curl -X POST http://localhost:8000/ \
   -H "Content-Type: application/json" \
-  -H "X-Passphrase: mysecret" \
+  -H "X-Read-Passphrase: readsecret" \
+  -H "X-Write-Passphrase: writesecret" \
   -d '{"hello":"world"}'
 ```
 
@@ -74,7 +80,7 @@ Read encrypted item:
 
 ```bash
 curl http://localhost:8000/<uuid> \
-  -H "X-Passphrase: mysecret"
+  -H "X-Read-Passphrase: readsecret"
 ```
 
 Update encrypted item:
@@ -82,16 +88,17 @@ Update encrypted item:
 ```bash
 curl -X POST http://localhost:8000/<uuid> \
   -H "Content-Type: text/plain" \
-  -H "X-Passphrase: mysecret" \
+  -H "X-Write-Passphrase: writesecret" \
   -d "new payload"
 ```
 
-Convert an existing plaintext item to encrypted (send `X-Passphrase` on update):
+Convert an existing plaintext item to encrypted (send both headers on update):
 
 ```bash
 curl -X POST http://localhost:8000/<uuid> \
   -H "Content-Type: application/json" \
-  -H "X-Passphrase: mysecret" \
+  -H "X-Read-Passphrase: readsecret" \
+  -H "X-Write-Passphrase: writesecret" \
   -d '{"now":"encrypted"}'
 ```
 
