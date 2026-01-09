@@ -325,7 +325,19 @@ def status_page():
     def _v(key: str) -> int:
         return int(metrics.get(key, 0))
 
-    html = """
+    req_total = _v("req_total")
+    resp_ms_total = _v("resp_ms_total")
+    avg_ms = int(resp_ms_total / req_total) if req_total else 0
+
+    uptime = data["uptime_seconds"] if data["uptime_seconds"] is not None else "-"
+    ttl = data["ttl_seconds"]
+    items_total = items["items_total"]
+    items_encrypted = items["items_encrypted"]
+    r_root = _v("req_route:/")
+    r_uuid = _v("req_route:/{uuid}")
+    r_status = _v("req_route:/status")
+
+    html = f"""
 <!doctype html>
 <html lang=\"en\">
   <head>
@@ -333,15 +345,15 @@ def status_page():
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
     <title>GetBack API Status</title>
     <style>
-      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; line-height: 1.4; }
-      h1 { margin: 0 0 12px 0; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
-      .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }
-      .k { color: #6b7280; font-size: 12px; }
-      .v { font-size: 18px; font-weight: 600; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #f0f2f5; }
-      code { background: #f3f4f6; padding: 2px 6px; border-radius: 6px; }
+      body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; line-height: 1.4; }}
+      h1 {{ margin: 0 0 12px 0; }}
+      .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }}
+      .card {{ border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }}
+      .k {{ color: #6b7280; font-size: 12px; }}
+      .v {{ font-size: 18px; font-weight: 600; }}
+      table {{ width: 100%; border-collapse: collapse; }}
+      th, td {{ text-align: left; padding: 6px 8px; border-bottom: 1px solid #f0f2f5; }}
+      code {{ background: #f3f4f6; padding: 2px 6px; border-radius: 6px; }}
     </style>
   </head>
   <body>
@@ -372,22 +384,8 @@ def status_page():
 </html>
 """
 
-    req_total = _v("req_total")
-    resp_ms_total = _v("resp_ms_total")
-    avg_ms = int(resp_ms_total / req_total) if req_total else 0
-
     return Response(
-        content=html.format(
-            uptime=data["uptime_seconds"] if data["uptime_seconds"] is not None else "-",
-            ttl=data["ttl_seconds"],
-            items_total=items["items_total"],
-            items_encrypted=items["items_encrypted"],
-            req_total=req_total,
-            avg_ms=avg_ms,
-            r_root=_v("req_route:/"),
-            r_uuid=_v("req_route:/{uuid}"),
-            r_status=_v("req_route:/status"),
-        ),
+        content=html,
         media_type="text/html",
     )
 
