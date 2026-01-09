@@ -4,6 +4,8 @@ import sqlite3
 import time
 import uuid
 import base64
+import re
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -19,6 +21,11 @@ DB_PATH = os.environ.get("DB_PATH", "/data/app.db")
 app = FastAPI(title="GetBack API")
 
 
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 def _now_ts() -> int:
     return int(time.time())
 
@@ -27,6 +34,28 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _metric_inc(conn: sqlite3.Connection, key: str, amount: int = 1) -> None:
+    conn.execute(
+        """
+        INSERT INTO metrics(key, value) VALUES(?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = value + excluded.value
+        """,
+        (key, amount),
+    )
+
+
+def _route_key(path: str) -> str:
+    if path == "/":
+        return "/"
+    if path.startswith("/status"):
+        return "/status"
+    if path.startswith("/"):
+        rest = path[1:]
+        if UUID_RE.match(rest):
+            return "/{uuid}"
+    return path
 
 
 def _get_read_passphrase(request: Request) -> Optional[str]:
@@ -130,6 +159,15 @@ def _init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_items_expires_at ON items(expires_at)")
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metrics (
+                key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            )
+            """
+        )
+
         cols = {row["name"] for row in conn.execute(
             "PRAGMA table_info(items)").fetchall()}
         if "encrypted" not in cols:
@@ -200,6 +238,158 @@ def _normalize_payload(request: Request, raw: bytes) -> Tuple[str, str]:
 @app.on_event("startup")
 def on_startup() -> None:
     _init_db()
+    app.state.started_at = datetime.now(timezone.utc)
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = int((time.perf_counter() - start) * 1000)
+
+    method = request.method.upper()
+    route = _route_key(request.url.path)
+    status = int(getattr(response, "status_code", 0) or 0)
+    status_class = f"{status // 100}xx" if status else "unknown"
+
+    try:
+        with _connect() as conn:
+            _metric_inc(conn, "req_total")
+            _metric_inc(conn, f"req_method:{method}")
+            _metric_inc(conn, f"req_route:{route}")
+            _metric_inc(conn, f"req_route_method:{route}:{method}")
+            _metric_inc(conn, f"req_status_class:{status_class}")
+            _metric_inc(conn, f"req_status:{status}")
+            _metric_inc(conn, f"req_route_status:{route}:{status}")
+            _metric_inc(conn, "resp_ms_total", duration_ms)
+    except Exception:
+        pass
+
+    return response
+
+
+def _get_metrics_snapshot(conn: sqlite3.Connection):
+    rows = conn.execute("SELECT key, value FROM metrics").fetchall()
+    return {row["key"]: int(row["value"]) for row in rows}
+
+
+def _get_item_stats(conn: sqlite3.Connection):
+    now = _now_ts()
+    _cleanup_expired(conn)
+    total = int(
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM items WHERE expires_at > ?", (now,)).fetchone()["c"]
+    )
+    encrypted = int(
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM items WHERE expires_at > ? AND encrypted = 1", (now,)
+        ).fetchone()["c"]
+    )
+    return {"items_total": total, "items_encrypted": encrypted}
+
+
+@app.get("/status.json")
+def status_json():
+    started_at = getattr(app.state, "started_at", None)
+    now_dt = datetime.now(timezone.utc)
+    uptime_seconds = int(
+        (now_dt - started_at).total_seconds()) if started_at else None
+
+    with _connect() as conn:
+        metrics = _get_metrics_snapshot(conn)
+        item_stats = _get_item_stats(conn)
+
+    db_size_bytes = None
+    try:
+        if os.path.exists(DB_PATH):
+            db_size_bytes = os.path.getsize(DB_PATH)
+    except Exception:
+        db_size_bytes = None
+
+    return {
+        "uptime_seconds": uptime_seconds,
+        "ttl_seconds": TTL_SECONDS,
+        "db_path": DB_PATH,
+        "db_size_bytes": db_size_bytes,
+        "items": item_stats,
+        "metrics": metrics,
+    }
+
+
+@app.get("/status")
+def status_page():
+    data = status_json()
+    items = data["items"]
+    metrics = data["metrics"]
+
+    def _v(key: str) -> int:
+        return int(metrics.get(key, 0))
+
+    html = """
+<!doctype html>
+<html lang=\"en\">
+  <head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <title>GetBack API Status</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; line-height: 1.4; }
+      h1 { margin: 0 0 12px 0; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+      .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }
+      .k { color: #6b7280; font-size: 12px; }
+      .v { font-size: 18px; font-weight: 600; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #f0f2f5; }
+      code { background: #f3f4f6; padding: 2px 6px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>GetBack API Status</h1>
+    <div class=\"grid\">
+      <div class=\"card\"><div class=\"k\">Uptime (seconds)</div><div class=\"v\">{uptime}</div></div>
+      <div class=\"card\"><div class=\"k\">TTL (seconds)</div><div class=\"v\">{ttl}</div></div>
+      <div class=\"card\"><div class=\"k\">Items stored</div><div class=\"v\">{items_total}</div></div>
+      <div class=\"card\"><div class=\"k\">Items encrypted</div><div class=\"v\">{items_encrypted}</div></div>
+      <div class=\"card\"><div class=\"k\">Requests total</div><div class=\"v\">{req_total}</div></div>
+      <div class=\"card\"><div class=\"k\">Avg response time (ms)</div><div class=\"v\">{avg_ms}</div></div>
+    </div>
+
+    <h2>Requests by route</h2>
+    <table>
+      <thead>
+        <tr><th>Route</th><th>Count</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>/</code></td><td>{r_root}</td></tr>
+        <tr><td><code>/{{uuid}}</code></td><td>{r_uuid}</td></tr>
+        <tr><td><code>/status</code></td><td>{r_status}</td></tr>
+      </tbody>
+    </table>
+
+    <p>JSON: <a href=\"/status.json\"><code>/status.json</code></a></p>
+  </body>
+</html>
+"""
+
+    req_total = _v("req_total")
+    resp_ms_total = _v("resp_ms_total")
+    avg_ms = int(resp_ms_total / req_total) if req_total else 0
+
+    return Response(
+        content=html.format(
+            uptime=data["uptime_seconds"] if data["uptime_seconds"] is not None else "-",
+            ttl=data["ttl_seconds"],
+            items_total=items["items_total"],
+            items_encrypted=items["items_encrypted"],
+            req_total=req_total,
+            avg_ms=avg_ms,
+            r_root=_v("req_route:/"),
+            r_uuid=_v("req_route:/{uuid}"),
+            r_status=_v("req_route:/status"),
+        ),
+        media_type="text/html",
+    )
 
 
 @app.post("/")

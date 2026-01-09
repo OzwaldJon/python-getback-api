@@ -12,6 +12,11 @@ Swagger:
 
 - `http://localhost:8000/docs`
 
+Status:
+
+- `http://localhost:8000/status` (HTML)
+- `http://localhost:8000/status.json` (JSON)
+
 ## Features
 
 ### TTL storage (48h)
