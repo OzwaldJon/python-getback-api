@@ -1,0 +1,133 @@
+GetBack API (48h TTL storage) — LLM Usage Guide
+
+Base URL
+- Use the user-provided base URL (example: https://getback.easycnc.be)
+
+Overview
+- This API stores a payload for 48 hours and returns a UUID.
+- Later, the payload can be fetched or updated using that UUID.
+- Payloads are either:
+  - JSON (Content-Type: application/json)
+  - Plain text (Content-Type: text/plain)
+- Optional encryption at rest is supported.
+  - Read permission and write permission use different passphrases.
+
+Important rules for an LLM client
+- Always set the correct Content-Type header (application/json or text/plain).
+- Treat any 404 as “not found / expired / no access”. Do not try to infer which.
+- Never log or expose passphrases.
+- If encrypting, you MUST keep both passphrases in your own memory/context.
+  - If you lose them, the stored data is unrecoverable.
+
+Endpoints
+
+1) Create new item
+- Method: POST
+- Path: /
+- Request body: JSON or plain text
+- Response: JSON {"id": "<uuid>"}
+
+Optional encryption on create
+- To store encrypted, include BOTH headers:
+  - X-Read-Passphrase: <string>
+  - X-Write-Passphrase: <string>
+- If you provide only one of the two, the API returns 400.
+
+Examples
+
+Create (unencrypted JSON)
+POST /
+Content-Type: application/json
+Body: {"message":"hello"}
+
+Create (encrypted JSON)
+POST /
+Content-Type: application/json
+X-Read-Passphrase: <read_secret>
+X-Write-Passphrase: <write_secret>
+Body: {"message":"hello"}
+
+Create (unencrypted text)
+POST /
+Content-Type: text/plain
+Body: hello
+
+2) Read an item
+- Method: GET
+- Path: /{uuid}
+- Success: returns the stored payload with its original Content-Type
+- Failure: 404 if not found, expired, or (if encrypted) missing/wrong read passphrase
+
+Read encrypted item
+- Include header:
+  - X-Read-Passphrase: <read_secret>
+
+Example
+GET /{uuid}
+X-Read-Passphrase: <read_secret>
+
+3) Update an item
+- Method: POST
+- Path: /{uuid}
+- Body: JSON or plain text
+- Behavior:
+  - If UUID does not exist/expired: 404
+  - If item is encrypted:
+    - you MUST include X-Write-Passphrase
+    - missing/wrong passphrase => 404
+  - If item is unencrypted:
+    - without passphrases: updates as plaintext
+    - with BOTH passphrases: updates and converts it to encrypted
+
+Update encrypted item
+- Include header:
+  - X-Write-Passphrase: <write_secret>
+
+Example
+POST /{uuid}
+Content-Type: application/json
+X-Write-Passphrase: <write_secret>
+Body: {"message":"updated"}
+
+Convert existing plaintext item to encrypted during update
+POST /{uuid}
+Content-Type: application/json
+X-Read-Passphrase: <read_secret>
+X-Write-Passphrase: <write_secret>
+Body: {"message":"now encrypted"}
+
+Status / stats (public)
+
+4) Status page (HTML)
+- Method: GET
+- Path: /status
+- Returns: HTML showing uptime, stored items, request counts per route, etc.
+
+5) Status data (JSON)
+- Method: GET
+- Path: /status.json
+- Returns: JSON metrics snapshot
+
+Error handling
+- 400: invalid request (usually missing one of encryption headers)
+- 404: not found / expired / no access (for encrypted items)
+- 415: unsupported Content-Type
+- 500: server error (retry may succeed; do not spam)
+
+When to use encryption
+- Use encryption if the payload contains sensitive data.
+- Choose:
+  - Read passphrase: shared with parties allowed to view
+  - Write passphrase: shared only with parties allowed to modify
+
+Suggested LLM interaction pattern
+- If user asks to store something:
+  - Ask whether it should be encrypted.
+  - If yes, ask for read/write passphrases (or generate them if the user requests that).
+  - POST / and store returned UUID for later retrieval.
+- If user provides a UUID:
+  - Try GET /{uuid}.
+  - If 404 and the user expects it to exist, ask if it might be encrypted and request the read passphrase.
+- If user asks to update:
+  - POST /{uuid} with new body.
+  - If encrypted, request write passphrase.
