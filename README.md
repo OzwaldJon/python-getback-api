@@ -51,6 +51,12 @@ Only these `Content-Type` values are accepted:
 - Body: `application/json` or `text/plain`
 - If uuid does not exist (or is expired): `404`
 
+#### Delete
+
+- `DELETE /{uuid}`
+- If uuid does not exist (or is expired): `404`
+- If the item is encrypted: requires `X-Write-Passphrase` (missing/wrong => `404`)
+
 ### Optional encryption with passphrase
 
 If you include passphrase headers, the API will store the payload **encrypted at rest**.

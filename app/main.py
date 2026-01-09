@@ -466,6 +466,39 @@ async def create_item(request: Request):
     return {"id": item_id}
 
 
+@app.delete("/{item_id}")
+def delete_item(item_id: str, request: Request):
+    write_passphrase = _get_write_passphrase(request)
+
+    with _connect() as conn:
+        row = _get_item(conn, item_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        if int(row["encrypted"] or 0) == 1:
+            if row["wrapped_key_write_b64"] is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            if write_passphrase is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            try:
+                _unwrap_data_key(
+                    row["wrapped_key_write_b64"],
+                    write_passphrase,
+                    row["wrapped_key_write_salt_b64"],
+                    row["wrapped_key_write_nonce_b64"],
+                    int(row["wrapped_key_write_kdf_iterations"] or KDF_ITERATIONS),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail="Not found") from exc
+
+        _cleanup_expired(conn)
+        res = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Not found")
+
+    return {"id": item_id}
+
+
 def _get_item(conn: sqlite3.Connection, item_id: str) -> Optional[sqlite3.Row]:
     _cleanup_expired(conn)
     row = conn.execute(

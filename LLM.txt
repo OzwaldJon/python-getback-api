@@ -96,14 +96,27 @@ X-Read-Passphrase: <read_secret>
 X-Write-Passphrase: <write_secret>
 Body: {"message":"now encrypted"}
 
+4) Delete an item
+- Method: DELETE
+- Path: /{uuid}
+- Behavior:
+  - If UUID does not exist/expired: 404
+  - If item is encrypted:
+    - you MUST include X-Write-Passphrase
+    - missing/wrong passphrase => 404
+
+Example
+DELETE /{uuid}
+X-Write-Passphrase: <write_secret>
+
 Status / stats (public)
 
-4) Status page (HTML)
+5) Status page (HTML)
 - Method: GET
 - Path: /status
 - Returns: HTML showing uptime, stored items, request counts per route, etc.
 
-5) Status data (JSON)
+6) Status data (JSON)
 - Method: GET
 - Path: /status.json
 - Returns: JSON metrics snapshot
