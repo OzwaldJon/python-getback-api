@@ -441,7 +441,7 @@ async def create_item(request: Request):
               encrypted, payload_nonce_b64,
               wrapped_key_read_b64, wrapped_key_read_salt_b64, wrapped_key_read_nonce_b64, wrapped_key_read_kdf_iterations,
               wrapped_key_write_b64, wrapped_key_write_salt_b64, wrapped_key_write_nonce_b64, wrapped_key_write_kdf_iterations
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 item_id,
